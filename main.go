@@ -28,7 +28,11 @@ func main() {
 
 	logger.Info("Starting proxy...")
 
-	server := proxy.NewServer(":8080", blockingEngine, logger, mitmConnect)
+	server, err := proxy.NewServer(":8080", blockingEngine, logger, mitmConnect, "blockpage/blockpage.html")
+	if err != nil {
+		logger.Error("Failed to load block page", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Info("Proxy online and listening", "addr", ":8080")
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
