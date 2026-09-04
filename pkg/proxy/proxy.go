@@ -8,7 +8,7 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
-func NewServer(addr string, blockingEngine *filter.Engine, logger *slog.Logger) *http.Server {
+func NewServer(addr string, blockingEngine *filter.Engine, logger *slog.Logger, mitmConnect *goproxy.ConnectAction) *http.Server {
 	p := goproxy.NewProxyHttpServer()
 
 	p.OnRequest().DoFunc(func(req *http.Request, _ *goproxy.ProxyCtx) (*http.Request, *http.Response) {
@@ -30,7 +30,7 @@ func NewServer(addr string, blockingEngine *filter.Engine, logger *slog.Logger) 
 			}
 			return goproxy.RejectConnect, host
 		}
-		return goproxy.OkConnect, host
+		return mitmConnect, host
 	})
 
 	return &http.Server{
