@@ -3,10 +3,117 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Access blocked</title>
+  <title>Looks like this page isn't allowed</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #fafafa;
+      color: #202124;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem 1.5rem;
+      text-align: center;
+    }
+
+    .container {
+      max-width: 520px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 500;
+      color: #202124;
+      margin-bottom: 0.5rem;
+    }
+
+    .sub-heading {
+      font-size: 0.9375rem;
+      color: #5f6368;
+      margin-bottom: 2.5rem;
+    }
+
+    .details-box {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      font-size: 0.875rem;
+      color: #3c4043;
+      margin-bottom: 2rem;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .info-label {
+      color: #5f6368;
+    }
+
+    .info-value {
+      color: #202124;
+      font-weight: 500;
+      word-break: break-all;
+    }
+
+    .btn-permission {
+      background-color: #1a73e8;
+      color: #ffffff;
+      border: none;
+      padding: 0.625rem 1.5rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border-radius: 9999px;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+
+    .btn-permission:hover {
+      background-color: #1557b0;
+    }
+  </style>
 </head>
-<body style="font-family: sans-serif; text-align: center; padding: 4rem 1rem;">
-  <h1>Access blocked</h1>
-  <p>{{.Host}}</p>
+<body>
+
+  <div class="container">
+    <h1>Looks like this page isn't allowed</h1>
+    <p class="sub-heading">This page has been blocked by your network administrator</p>
+
+    <div class="details-box">
+      <div class="info-row">
+        <span class="info-label">URL:</span>
+        <span class="info-value">{{if .Host}}{{.Host}}{{else}}example.com{{end}}</span>
+      </div>
+
+      <div class="info-row">
+        <span class="info-label">Reason:</span>
+        <span class="info-value">{{if .Reason}}{{.Reason}}{{else}}Blocked by Category{{end}}</span>
+      </div>
+
+      <div class="info-row">
+        <span class="info-label">User:</span>
+        <span class="info-value">student@school.example</span>
+      </div>
+    </div>
+
+    <button class="btn-permission" onclick="window.history.back()">Ask for permission</button>
+  </div>
+
 </body>
 </html>
