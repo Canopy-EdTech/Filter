@@ -1,0 +1,60 @@
+{% extends "govuk/template.njk" %}
+
+{% block pageTitle %}Page blocked{% endblock %}
+
+{% block head %}
+  <link rel="stylesheet" href="temp.css">
+{% endblock %}
+
+{% block headIcons %}{% endblock %}
+
+{% block header %}
+  <header class="govuk-header" role="banner">
+    <div class="govuk-header__container govuk-width-container">
+      <div class="govuk-header__content">
+        <span class="govuk-header__logotype-text">Canopy Filter</span>
+      </div>
+    </div>
+  </header>
+{% endblock %}
+
+{% block footer %}{% endblock %}
+
+{% from "govuk/components/button/macro.njk" import govukButton %}
+
+{% block content %}
+  <div class="govuk-grid-row">
+    <div class="govuk-grid-column-two-thirds">
+      <h1 class="govuk-heading-xl">This page is blocked</h1>
+      <p class="govuk-body-l">Canopy has stopped this page from loading.</p>
+
+      <h2 class="govuk-heading-m">What happened?</h2>
+
+      <dl class="govuk-summary-list">
+        <div class="govuk-summary-list__row">
+          <dt class="govuk-summary-list__key">Website</dt>
+          <dd class="govuk-summary-list__value">
+            <code>{% raw %}{{if .Host}}{{.Host}}{{else}}unknown{{end}}{% endraw %}</code>
+          </dd>
+        </div>
+        <div class="govuk-summary-list__row">
+          <dt class="govuk-summary-list__key">Reason</dt>
+          <dd class="govuk-summary-list__value">
+            {% raw %}{{if .Reason}}{{.Reason}}{{else}}This website is not allowed on this network{{end}}{% endraw %}
+          </dd>
+        </div>
+      </dl>
+
+      <p class="govuk-body">Think this is a mistake? Ask your network administrator.</p>
+
+      <div class="govuk-button-group">
+        {{ govukButton({
+          text: "Go back",
+          attributes: {
+            onclick: "window.history.back()"
+          }
+        }) }}
+      </div>
+    </div>
+  </div>
+{% endblock %}

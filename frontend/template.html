@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en" class="govuk-template">
+  <head>
+    <meta charset="utf-8">
+    <title>Page blocked</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#006d77">
+
+    
+  <link rel="stylesheet" href="temp.css">
+
+
+    
+    
+  </head>
+  <body class="govuk-template__body">
+    <script>document.body.className += ' js-enabled' + ('noModule' in HTMLScriptElement.prototype ? ' govuk-frontend-supported' : '');</script>
+    
+
+    
+        <a href="#main-content" class="govuk-skip-link" data-module="govuk-skip-link">Skip to main content</a>
+
+      
+
+    
+    
+
+    
+  <header class="govuk-header" role="banner">
+    <div class="govuk-header__container govuk-width-container">
+      <div class="govuk-header__content">
+        <span class="govuk-header__logotype-text">Canopy Filter</span>
+      </div>
+    </div>
+  </header>
+
+
+    
+      <div class="govuk-width-container">
+        
+        
+        <main class="govuk-main-wrapper" id="main-content">
+          
+  <div class="govuk-grid-row">
+    <div class="govuk-grid-column-two-thirds">
+      <h1 class="govuk-heading-xl">This page is blocked</h1>
+      <p class="govuk-body-l">Canopy has stopped this page from loading.</p>
+
+      <h2 class="govuk-heading-m">What happened?</h2>
+
+      <dl class="govuk-summary-list">
+        <div class="govuk-summary-list__row">
+          <dt class="govuk-summary-list__key">Website</dt>
+          <dd class="govuk-summary-list__value">
+            <code>{{if .Host}}{{.Host}}{{else}}unknown{{end}}</code>
+          </dd>
+        </div>
+        <div class="govuk-summary-list__row">
+          <dt class="govuk-summary-list__key">Why it was blocked</dt>
+          <dd class="govuk-summary-list__value">
+            {{if .Reason}}{{.Reason}}{{else}}This website is not allowed on this network{{end}}
+          </dd>
+        </div>
+      </dl>
+
+      <p class="govuk-body">Think this is a mistake? Ask your network administrator.</p>
+
+      <div class="govuk-button-group">
+        
+<button type="submit" class="govuk-button" data-module="govuk-button"
+    
+        
+        
+      
+        
+      
+    
+   onclick="window.history.back()">
+  Go back
+</button>
+
+      </div>
+    </div>
+  </div>
+
+        </main>
+        
+        
+      </div>
+    
+
+    
+    
+
+    
+
+    
+  </body>
+</html>

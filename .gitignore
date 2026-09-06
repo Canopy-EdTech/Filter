@@ -36,3 +36,7 @@ certs/
 *.crt
 *.key
 *.pem
+
+# Node.js
+frontend/node_modules/
+frontend/package-lock.json

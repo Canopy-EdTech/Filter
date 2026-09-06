@@ -1,0 +1,14 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.js && sass styles.scss temp.css --style=compressed --load-path=node_modules/govuk-frontend/dist && html-inline -i template.html -o ../blockpage/blockpage.html -b . && rm temp.css"
+  },
+  "devDependencies": {
+    "govuk-frontend": "^6.5.0",
+    "html-inline": "^1.2.0",
+    "nunjucks": "^3.2.4",
+    "sass": "^1.104.0"
+  }
+}
