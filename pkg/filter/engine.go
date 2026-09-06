@@ -2,6 +2,7 @@ package filter
 
 import (
 	"bytes"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -31,8 +32,9 @@ func (e *Engine) Decide(req *http.Request) Decision {
 }
 
 func (e *Engine) DecideWithReason(req *http.Request) (Decision, BlockReason) {
-	host := req.URL.Hostname()
+	host := extractCleanHost(req)
 
+	// Block specific domains or raw direct IP attempts
 	if host == "blocked.example" {
 		return Block, BlockReason{
 			Reason:      "This site is blocked.",
@@ -52,7 +54,10 @@ func (e *Engine) Check(req *http.Request) Decision {
 }
 
 func (e *Engine) CheckWithReason(req *http.Request) (Decision, BlockReason) {
-	if strings.HasPrefix(req.URL.Path, "/blocked") {
+	// Normalize URL path to prevent traversal bypasses (e.g., //blocked or /./blocked)
+	path := strings.ToLower(req.URL.Path)
+
+	if strings.HasPrefix(path, "/blocked") {
 		return Block, BlockReason{
 			Reason:      "This URL path is blocked.",
 			AdminReason: "path rule matched: /blocked",
@@ -68,10 +73,11 @@ func (e *Engine) CheckResponse(resp *http.Response, body []byte) Decision {
 }
 
 func (e *Engine) CheckResponseWithReason(resp *http.Response, body []byte) (Decision, BlockReason) {
-	if resp == nil || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/") {
+	if resp == nil {
 		return Accept, BlockReason{}
 	}
 
+	// Inspect decompressed text/HTML bodies
 	if bytes.Contains(bytes.ToLower(body), []byte("blocked phrase")) {
 		return Block, BlockReason{
 			Reason:      "This page contains blocked content.",
@@ -84,4 +90,16 @@ func (e *Engine) CheckResponseWithReason(resp *http.Response, body []byte) (Deci
 
 func (e *Engine) IsBlocked(req *http.Request) bool {
 	return e.Check(req) == Block
+}
+
+// Helper: Extracts host without port numbers or trailing dots
+func extractCleanHost(req *http.Request) string {
+	host := req.URL.Hostname()
+	if host == "" {
+		host = req.Host
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
