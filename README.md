@@ -1,6 +1,8 @@
 # Filter
 Web filtering for schools made easy
 
+Canopy Filter works with a mix of domain and content filtering, it can be used without a device agent, just a proxy server, which means that deployment is super simple, enforce the proxy server, and trust the mitm cert.
+
 ## Trusting the MITM certificate on Linux
 
 Inspected HTTPS traffic is re-signed by `certs/ca.crt`. The client browser must trust this certificate or it will report `tls: unknown certificate authority`.
