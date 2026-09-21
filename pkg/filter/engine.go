@@ -16,6 +16,8 @@ type BlockReason struct {
 	AdminReason string
 }
 
+const BlockedPhrase = "blocked phrase"
+
 const (
 	Accept Decision = iota
 	Block
@@ -78,10 +80,10 @@ func (e *Engine) CheckResponseWithReason(resp *http.Response, body []byte) (Deci
 	}
 
 	// Inspect decompressed text/HTML bodies
-	if bytes.Contains(bytes.ToLower(body), []byte("blocked phrase")) {
+	if bytes.Contains(bytes.ToLower(body), []byte(BlockedPhrase)) {
 		return Block, BlockReason{
 			Reason:      "This page contains blocked content.",
-			AdminReason: "page content matched phrase: blocked phrase",
+			AdminReason: "page content matched phrase: " + BlockedPhrase,
 		}
 	}
 
