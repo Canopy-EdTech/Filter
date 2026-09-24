@@ -13,6 +13,12 @@ Generate the CA if needed:
 ./utils/generatecerts.sh
 ```
 
+On Windows, use the batch equivalent (requires OpenSSL on `PATH`, e.g. from Git for Windows):
+
+```bat
+utils\generatecerts.bat
+```
+
 For Firefox, open **Settings > Privacy & Security > Certificates > View Certificates > Authorities**, import `certs/ca.crt`, and enable trust for websites.
 
 For Chromium-based browsers using the system certificate store:
