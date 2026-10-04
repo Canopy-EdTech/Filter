@@ -458,10 +458,14 @@ func (f *webSocketFilter) Read(p []byte) (int, error) {
 			f.reportBlock(reason)
 			return 0, io.EOF
 		}
+		// Release every buffered fragment, not just this last frame.
 		f.pending = append(f.pending[:0], f.textFrames...)
 		f.fragmented = false
 		f.textPayload = nil
 		f.textFrames = nil
+		n := copy(p, f.pending)
+		f.pending = f.pending[n:]
+		return n, nil
 	} else if opcode == 1 {
 		decision, reason := f.checkIncoming(payload)
 		if decision == filter.Block {

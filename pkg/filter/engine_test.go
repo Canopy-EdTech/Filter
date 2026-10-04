@@ -54,6 +54,7 @@ func TestDecideWithReasonDomainRules(t *testing.T) {
 		{"accepted", "https://accepted.example/", Accept},
 		{"unknown action falls through to inspect", "https://odd.example/", Inspect},
 		{"unlisted domain", "https://other.example/", Inspect},
+		{"subdomain of blocked", "https://www.blocked.example/", Block},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,11 +79,77 @@ func TestDecideWithReasonUsesHostWhenURLHasNoHost(t *testing.T) {
 	}
 }
 
-// Documents current behavior: only exact hostnames match, not subdomains.
-func TestDomainRulesMatchExactHostOnly(t *testing.T) {
-	e, _ := newTestEngine(t, defaultRules)
-	if got, _ := e.DecideWithReason(get("https://www.blocked.example/")); got != Inspect {
-		t.Fatalf("subdomain decision = %v; update this test if subdomain matching is added", got)
+func TestDomainRulesCoverSubdomains(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {
+		rule("domain", "blocked.example", "block"),
+		rule("domain", "allowed.example", "accept"),
+		// Exceptions: the most specific rule wins.
+		rule("domain", "ok.blocked.example", "accept"),
+		rule("domain", "bad.allowed.example", "block"),
+		rule("domain", "10.0.0.1", "block"),
+	}})
+	tests := []struct {
+		host string
+		want Decision
+	}{
+		{"blocked.example", Block},
+		{"www.blocked.example", Block},
+		{"a.b.c.blocked.example", Block},
+		{"WWW.Blocked.Example", Block},
+		{"www.blocked.example.", Block},
+		{"notblocked.example", Inspect},       // shares a suffix, but not a label boundary
+		{"blocked.example.evil.com", Inspect}, // rule domain must be the suffix, not a prefix
+		{"example", Inspect},
+		{"ok.blocked.example", Accept}, // accept exception under a blocked parent
+		{"deep.ok.blocked.example", Accept},
+		{"allowed.example", Accept},
+		{"www.allowed.example", Accept},
+		{"bad.allowed.example", Block}, // block exception under an accepted parent
+		{"x.bad.allowed.example", Block},
+		{"10.0.0.1", Block},
+		{"10.0.0.2", Inspect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			if got, _ := e.DecideWithReason(get("https://" + tt.host + "/")); got != tt.want {
+				t.Fatalf("decision = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDomainRulesDoNotSuffixMatchIPs(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {rule("domain", "0.1", "block")}})
+	if got, _ := e.DecideWithReason(get("https://10.0.0.1/")); got != Inspect {
+		t.Fatalf("IP address matched a domain-suffix rule: %v", got)
+	}
+}
+
+func TestSubdomainBlockReasonNamesTheRule(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {rule("domain", "blocked.example", "block")}})
+	_, reason := e.DecideWithReason(get("https://www.blocked.example/"))
+	if !strings.Contains(reason.AdminReason, "blocked.example") || reason.Reason == "" {
+		t.Fatalf("reason = %+v", reason)
+	}
+}
+
+func TestDomainPatternsAreNormalized(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {
+		rule("domain", "*.Wild.Example", "block"),
+		rule("domain", ".dotted.example", "block"),
+		rule("domain", "trailing.example.", "block"),
+		rule("domain", "  spaced.example  ", "block"),
+		rule("domain", "", "block"),
+		rule("domain", "*.", "block"),
+	}})
+	for _, host := range []string{"wild.example", "x.wild.example", "dotted.example", "trailing.example", "spaced.example"} {
+		if !blockedDomain(e, host, "") {
+			t.Errorf("%s should be blocked", host)
+		}
+	}
+	// Empty patterns must not turn into a rule that blocks everything.
+	if blockedDomain(e, "unrelated.example", "") || blockedDomain(e, "localhost", "") {
+		t.Error("empty domain pattern blocked unrelated hosts")
 	}
 }
 
@@ -142,25 +209,81 @@ func TestKeywordPatternsAreQuoted(t *testing.T) {
 	}
 }
 
-// Keywords that start or end with punctuation never match in normal text,
-// because every pattern is wrapped in \b...\b and \b needs a word character
-// on one side. Remove the Skip once boundaries are only applied to word-
-// character edges.
+// Word boundaries apply only to edges that are ASCII word characters, so
+// keywords that start or end with punctuation (c++, #tag, (x) match naturally.
 func TestKeywordsWithPunctuationEdges(t *testing.T) {
-	t.Skip("known bug: \\b-wrapped patterns like \"c++\" or \"#tag\" never match")
-
 	e, _ := newTestEngine(t, map[int64][]ruleRow{
-		DefaultGroupID: {rule("keyword", "c++", "block"), rule("keyword", "#tag", "block")},
+		DefaultGroupID: {
+			rule("keyword", "c++", "block"),
+			rule("keyword", "#tag", "block"),
+			rule("keyword", "(x)", "block"),
+			rule("keyword", "caf\u00e9", "block"),
+			rule("keyword", "_id_", "block"),
+		},
 	})
 	req := get("https://x.example/")
-	for _, body := range []string{"learn c++ today", "c++", "#tag here"} {
-		if _, found := e.KeywordMatchRequest(req, []byte(body)); !found {
+	matches := func(body string) bool {
+		_, found := e.KeywordMatchRequest(req, []byte(body))
+		return found
+	}
+
+	for _, body := range []string{
+		"learn c++ today", "c++", "I love C++.", "(c++)",
+		"#tag here", "so #tag", "a#tag", // a leading-punctuation keyword matches anywhere
+		"call (x) now", "(x)",
+		"un caf\u00e9 noir", "caf\u00e9", "des caf\u00e9s",
+		"the _id_ field",
+	} {
+		if !matches(body) {
 			t.Errorf("%q should match", body)
 		}
 	}
-	for _, body := range []string{"xc++", "a#tag"} {
-		if _, found := e.KeywordMatchRequest(req, []byte(body)); found {
+	for _, body := range []string{
+		"xc++", "abc++", // the word-character edge still needs a boundary
+		"c+", "tag", "x",
+	} {
+		if matches(body) {
 			t.Errorf("%q should not match", body)
+		}
+	}
+}
+
+func TestKeywordMatchSpan(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {rule("keyword", "c++", "block"), rule("keyword", "bad phrase", "block")}})
+	req := get("https://x.example/")
+
+	data := []byte("I like C++ and a Bad Phrase too")
+	loc, found := e.KeywordMatchRequest(req, data)
+	if !found || string(data[loc[0]:loc[1]]) != "C++" {
+		t.Fatalf("span = %v, found %v", loc, found)
+	}
+
+	data = []byte("only a Bad Phrase here")
+	loc, found = e.KeywordMatchRequest(req, data)
+	if !found || string(data[loc[0]:loc[1]]) != "Bad Phrase" {
+		t.Fatalf("span = %v, found %v", loc, found)
+	}
+}
+
+func TestEmptyKeywordRuleDoesNotMatchEverything(t *testing.T) {
+	e, _ := newTestEngine(t, map[int64][]ruleRow{DefaultGroupID: {rule("keyword", "", "block")}})
+	if _, found := e.KeywordMatchRequest(get("https://x.example/"), []byte("anything at all")); found {
+		t.Fatal("empty keyword rule matched ordinary text")
+	}
+}
+
+func TestKeywordAlternative(t *testing.T) {
+	for in, want := range map[string]string{
+		"bad":       `\bbad\b`,
+		"c++":       `\bc\+\+`,
+		"#tag":      `#tag\b`,
+		"(x)":       `\(x\)`,
+		"a.b":       `\ba\.b\b`,
+		"_x_":       `\b_x_\b`,
+		"caf\u00e9": "\\bcaf\u00e9",
+	} {
+		if got := keywordAlternative(in); got != want {
+			t.Errorf("keywordAlternative(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

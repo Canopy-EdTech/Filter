@@ -85,13 +85,65 @@ func (e *Engine) DecideWithReason(req *http.Request) (Decision, BlockReason) {
 		return Inspect, BlockReason{}
 	}
 
-	if rule, ok := slot.Domains[host]; ok && rule.Action == Block {
+	if rule, ok := lookupDomain(slot.Domains, host); ok && rule.Action == Block {
 		return Block, BlockReason{Reason: rule.Reason, AdminReason: rule.AdminReason}
 	} else if ok && rule.Action == Accept {
 		return Accept, BlockReason{}
 	}
 
 	return Inspect, BlockReason{}
+}
+
+// lookupDomain finds the domain rule for host, trying the host itself and then
+// each parent domain, so a rule for example.com also covers www.example.com.
+// The most specific rule wins, which lets an accept rule for a subdomain carve
+// an exception out of a block rule on its parent (and vice versa). IP
+// addresses only ever match exactly.
+func lookupDomain(domains map[string]RuleAction, host string) (RuleAction, bool) {
+	if rule, ok := domains[host]; ok {
+		return rule, true
+	}
+	if net.ParseIP(host) != nil {
+		return RuleAction{}, false
+	}
+	for rest := host; ; {
+		_, parent, found := strings.Cut(rest, ".")
+		if !found || parent == "" {
+			return RuleAction{}, false
+		}
+		if rule, ok := domains[parent]; ok {
+			return rule, true
+		}
+		rest = parent
+	}
+}
+
+// normalizeDomainPattern lowercases a stored domain rule and strips the
+// decorations admins commonly type: a leading "*." or ".", and a trailing dot.
+func normalizeDomainPattern(pattern string) string {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	pattern = strings.TrimPrefix(pattern, "*.")
+	return strings.Trim(pattern, ".")
+}
+
+// keywordAlternative quotes a keyword for use in the combined regex and adds
+// \b word boundaries on the edges that are ASCII word characters. An edge
+// that is punctuation (c++, #tag) or non-ASCII gets no boundary: \b next to a
+// non-word character would demand a word character on the other side, which
+// made such keywords match only in unnatural places like "c++x".
+func keywordAlternative(keyword string) string {
+	quoted := regexp.QuoteMeta(keyword)
+	if isASCIIWordByte(keyword[0]) {
+		quoted = `\b` + quoted
+	}
+	if isASCIIWordByte(keyword[len(keyword)-1]) {
+		quoted += `\b`
+	}
+	return quoted
+}
+
+func isASCIIWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
 func (e *Engine) Check(req *http.Request) Decision {
@@ -239,14 +291,18 @@ func (e *Engine) loadSlot(groupID int) (CompiledSlot, error) {
 
 		switch ruleType {
 		case "domain":
-			domains[strings.ToLower(pattern)] = RuleAction{
+			domain := normalizeDomainPattern(pattern)
+			if domain == "" {
+				continue
+			}
+			domains[domain] = RuleAction{
 				Action:      decision,
 				Reason:      "This site is blocked.",
 				AdminReason: fmt.Sprintf("domain rule matched: %s", pattern),
 			}
 		case "keyword":
-			if decision == Block {
-				keywordPatterns = append(keywordPatterns, regexp.QuoteMeta(pattern))
+			if decision == Block && pattern != "" {
+				keywordPatterns = append(keywordPatterns, keywordAlternative(pattern))
 			}
 		}
 	}
@@ -256,7 +312,7 @@ func (e *Engine) loadSlot(groupID int) (CompiledSlot, error) {
 
 	var keywords *regexp.Regexp
 	if len(keywordPatterns) > 0 {
-		pattern := `(?i)\b(` + strings.Join(keywordPatterns, "|") + `)\b`
+		pattern := `(?i)(` + strings.Join(keywordPatterns, "|") + `)`
 		keywords, err = regexp.Compile(pattern)
 		if err != nil {
 			return CompiledSlot{}, fmt.Errorf("compile keyword regex: %w", err)

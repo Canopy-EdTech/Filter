@@ -409,12 +409,9 @@ func TestWebSocketServerBlocksEscapedKeyword(t *testing.T) {
 	}
 }
 
-// Known bug: a clean fragmented text message is delivered with only its final
-// fragment, because Read queues all fragments and then overwrites the queue
-// with the last frame. Remove the Skip once Read forwards every fragment.
+// Regression: Read used to queue every fragment of a clean text message and
+// then overwrite the queue with only the final frame.
 func TestWebSocketServerForwardsCleanFragmentedMessage(t *testing.T) {
-	t.Skip("known bug: clean fragmented messages lose all but the last fragment")
-
 	stream := bytes.Join([][]byte{
 		serverFrame(1, false, "hello "),
 		serverFrame(9, true, "ping"),
