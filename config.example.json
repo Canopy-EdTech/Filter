@@ -2,6 +2,8 @@
 	"listen_addr": ":8080",
 	"block_page_path": "blockpage/blockpage.html",
 	"log_level": "info",
+	"timezone": "Local",
+	"rule_refresh_interval": "30s",
 	"database": {
 		"url": "postgres://postgres:postgres@localhost:5432/canopy_filter?sslmode=disable"
 	},

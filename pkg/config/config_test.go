@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	_ "time/tzdata"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -21,6 +24,8 @@ func TestLoadFullConfig(t *testing.T) {
 		"listen_addr": ":9090",
 		"block_page_path": "page.html",
 		"log_level": "debug",
+		"timezone": "Europe/Amsterdam",
+		"rule_refresh_interval": "2m",
 		"database": {"url": "postgres://u:p@db:5432/x"},
 		"tls": {"ca_cert_path": "a.crt", "ca_key_path": "a.key"}
 	}`))
@@ -28,11 +33,13 @@ func TestLoadFullConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Config{
-		ListenAddr:    ":9090",
-		BlockPagePath: "page.html",
-		LogLevel:      "debug",
-		Database:      Database{URL: "postgres://u:p@db:5432/x"},
-		TLS:           TLS{CACertPath: "a.crt", CAKeyPath: "a.key"},
+		ListenAddr:          ":9090",
+		BlockPagePath:       "page.html",
+		LogLevel:            "debug",
+		Timezone:            "Europe/Amsterdam",
+		RuleRefreshInterval: "2m",
+		Database:            Database{URL: "postgres://u:p@db:5432/x"},
+		TLS:                 TLS{CACertPath: "a.crt", CAKeyPath: "a.key"},
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
@@ -84,6 +91,12 @@ func TestLoadErrors(t *testing.T) {
 		{"empty ca key", `{"tls": {"ca_key_path": ""}}`, "tls."},
 		{"empty block page", `{"block_page_path": ""}`, "block_page_path"},
 		{"bad log level", `{"log_level": "verbose"}`, "log_level"},
+		{"bad timezone", `{"timezone": "Mars/Olympus"}`, "timezone"},
+		{"empty timezone", `{"timezone": ""}`, "timezone"},
+		{"bad refresh interval", `{"rule_refresh_interval": "soon"}`, "rule_refresh_interval"},
+		{"zero refresh interval", `{"rule_refresh_interval": "0s"}`, "must be positive"},
+		{"negative refresh interval", `{"rule_refresh_interval": "-5s"}`, "must be positive"},
+		{"refresh interval needs a unit", `{"rule_refresh_interval": "30"}`, "rule_refresh_interval"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,5 +126,28 @@ func TestLoadAcceptsEveryLogLevel(t *testing.T) {
 func TestExampleConfigIsValid(t *testing.T) {
 	if _, err := Load("../../config.example.json"); err != nil {
 		t.Fatalf("config.example.json: %v", err)
+	}
+}
+
+func TestLocationAndRefreshInterval(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"timezone": "Europe/Amsterdam", "rule_refresh_interval": "1m30s"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc, err := cfg.Location()
+	if err != nil || loc.String() != "Europe/Amsterdam" {
+		t.Fatalf("location = %v, %v", loc, err)
+	}
+	d, err := cfg.RefreshInterval()
+	if err != nil || d != 90*time.Second {
+		t.Fatalf("interval = %v, %v", d, err)
+	}
+
+	def := Default()
+	if loc, err := def.Location(); err != nil || loc != time.Local {
+		t.Fatalf("default location = %v, %v; want the local zone", loc, err)
+	}
+	if d, _ := def.RefreshInterval(); d != 30*time.Second {
+		t.Fatalf("default interval = %v", d)
 	}
 }

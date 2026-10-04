@@ -2,23 +2,13 @@ package filter
 
 import (
 	"bytes"
-	"database/sql"
 	"fmt"
 	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
-
-type Engine struct {
-	db *sql.DB
-
-	mu    sync.RWMutex
-	cache map[string]CompiledSlot
-}
 
 // RuleAction is the compiled, ready-to-return outcome for a single rule.
 type RuleAction struct {
@@ -27,9 +17,8 @@ type RuleAction struct {
 	AdminReason string
 }
 
-// CompiledSlot is the cached, pre-compiled rule set for one group during one
-// time slot (day-of-week + hour block). Postgres has already resolved which
-// rules are in effect; nothing here is re-evaluated against the clock.
+// CompiledSlot is the pre-compiled rule set for one group: only the rules in
+// effect at the moment it was compiled, valid until the next schedule boundary.
 type CompiledSlot struct {
 	Domains  map[string]RuleAction
 	Keywords *regexp.Regexp
@@ -50,23 +39,6 @@ const (
 
 // DefaultGroupID is used when a request carries no group identity.
 const DefaultGroupID = 1
-
-const rulesQuery = `
-SELECT r.type, r.pattern, r.action
-FROM rules r
-JOIN rule_groups rg ON rg.rule_id = r.id
-JOIN rule_schedules rs ON rs.rule_id = r.id
-WHERE rg.group_id = $1
-  AND CURRENT_TIME BETWEEN rs.start_time AND rs.end_time
-  AND (rs.days_mask & (1 << (EXTRACT(ISODOW FROM CURRENT_TIMESTAMP)::int - 1))) > 0
-`
-
-func NewEngine(db *sql.DB) *Engine {
-	return &Engine{
-		db:    db,
-		cache: make(map[string]CompiledSlot),
-	}
-}
 
 func (e *Engine) Decide(req *http.Request) Decision {
 	decision, _ := e.DecideWithReason(req)
@@ -238,90 +210,6 @@ func (e *Engine) IsBlocked(req *http.Request) bool {
 	return e.Check(req) == Block
 }
 
-// getSlot returns the compiled slot for groupID at the current time slot,
-// loading and caching it from Postgres on a miss.
-func (e *Engine) getSlot(groupID int) (CompiledSlot, error) {
-	key := cacheKey(groupID)
-
-	e.mu.RLock()
-	slot, ok := e.cache[key]
-	e.mu.RUnlock()
-	if ok {
-		return slot, nil
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Another goroutine may have populated this slot while we waited for
-	// the write lock.
-	if slot, ok := e.cache[key]; ok {
-		return slot, nil
-	}
-
-	slot, err := e.loadSlot(groupID)
-	if err != nil {
-		return CompiledSlot{}, err
-	}
-
-	e.cache[key] = slot
-	return slot, nil
-}
-
-// loadSlot runs the raw SQL join against Postgres, letting the database
-// evaluate the time/day window statically, then compiles the resulting rows
-// into a CompiledSlot: a domain lookup map plus one combined keyword regex.
-func (e *Engine) loadSlot(groupID int) (CompiledSlot, error) {
-	rows, err := e.db.Query(rulesQuery, groupID)
-	if err != nil {
-		return CompiledSlot{}, fmt.Errorf("query rules for group %d: %w", groupID, err)
-	}
-	defer rows.Close()
-
-	domains := make(map[string]RuleAction)
-	var keywordPatterns []string
-
-	for rows.Next() {
-		var ruleType, pattern, action string
-		if err := rows.Scan(&ruleType, &pattern, &action); err != nil {
-			return CompiledSlot{}, fmt.Errorf("scan rule row: %w", err)
-		}
-
-		decision := actionToDecision(action)
-
-		switch ruleType {
-		case "domain":
-			domain := normalizeDomainPattern(pattern)
-			if domain == "" {
-				continue
-			}
-			domains[domain] = RuleAction{
-				Action:      decision,
-				Reason:      "This site is blocked.",
-				AdminReason: fmt.Sprintf("domain rule matched: %s", pattern),
-			}
-		case "keyword":
-			if decision == Block && pattern != "" {
-				keywordPatterns = append(keywordPatterns, keywordAlternative(pattern))
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return CompiledSlot{}, fmt.Errorf("iterate rule rows: %w", err)
-	}
-
-	var keywords *regexp.Regexp
-	if len(keywordPatterns) > 0 {
-		pattern := `(?i)(` + strings.Join(keywordPatterns, "|") + `)`
-		keywords, err = regexp.Compile(pattern)
-		if err != nil {
-			return CompiledSlot{}, fmt.Errorf("compile keyword regex: %w", err)
-		}
-	}
-
-	return CompiledSlot{Domains: domains, Keywords: keywords}, nil
-}
-
 func actionToDecision(action string) Decision {
 	switch strings.ToLower(action) {
 	case "block":
@@ -331,14 +219,6 @@ func actionToDecision(action string) Decision {
 	default:
 		return Inspect
 	}
-}
-
-// cacheKey combines the group with a time slot derived from the current
-// day-of-week and hour block, matching the granularity Postgres evaluates
-// rule_schedules at.
-func cacheKey(groupID int) string {
-	now := time.Now()
-	return fmt.Sprintf("%d:%d-%d", groupID, int(now.Weekday()), now.Hour())
 }
 
 // resolveGroupID maps a request to its filtering group. There is no

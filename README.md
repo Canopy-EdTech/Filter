@@ -38,6 +38,27 @@ curl -v --cacert certs/ca.crt --noproxy "" \
 	https://example.org/
 ```
 
+## Configuration and rule schedules
+
+Low-level settings live in `config.json` (copy `config.example.json`; the real file is gitignored because it holds the database URL). Rules, groups and schedules live in the database.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `listen_addr` | `:8080` | Proxy listen address |
+| `database.url` | local Postgres | Postgres connection string |
+| `timezone` | `Local` | IANA zone (e.g. `Europe/Amsterdam`) that rule schedules are evaluated in |
+| `rule_refresh_interval` | `30s` | How often rules are re-read; edits in the database take effect within this time |
+
+Schedule behavior:
+
+- `start_time` and `end_time` are inclusive and have no timezone of their own; they are read in the configured `timezone`. Set it to the school's zone, since a server (or container) is often on UTC.
+- `days_mask` bit 0 is Monday and bit 6 is Sunday (127 = every day).
+- Rules switch on and off at their exact start and end time, not on the hour.
+- A window whose start is after its end crosses midnight: `22:00`-`06:00` with Monday set runs from Monday 22:00 until Tuesday 06:00. The mask names the day the window starts, so Sunday's overnight window ends on Monday morning.
+- A rule with no schedule row is never active.
+- If two active rules disagree about the same domain, blocking wins; a more specific domain (`ok.example.com`) still overrides its parent (`example.com`).
+- If a refresh fails, the previous rules stay in force and the refresh is retried every few seconds. Only a failed first load leaves a group unfiltered.
+
 ## Running the tests
 
 ```bash

@@ -81,9 +81,15 @@ func newSchemaDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// dbClock reports the database's idea of "now": the weekday bit used by
-// days_mask (bit 0 = Monday) and windows that do / don't contain this moment.
-type dbClock struct {
+// pgEngine builds an engine that evaluates schedules in UTC, so the tests do
+// not depend on the machine's timezone.
+func pgEngine(db *sql.DB, opts ...Option) *Engine {
+	return NewEngine(db, append([]Option{WithLocation(time.UTC)}, opts...)...)
+}
+
+// testClock describes schedules relative to the current moment (UTC): windows
+// and day masks that do, or do not, contain it.
+type testClock struct {
 	todayBit     int
 	otherDays    int
 	activeStart  string
@@ -92,16 +98,12 @@ type dbClock struct {
 	inactiveTo   string
 }
 
-func newDBClock(t *testing.T, db *sql.DB) dbClock {
+func newDBClock(t *testing.T, _ *sql.DB) testClock {
 	t.Helper()
-	var now time.Time
-	var tod string
-	if err := db.QueryRow("SELECT CURRENT_TIMESTAMP, CURRENT_TIME::time::text").Scan(&now, &tod); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Now().UTC()
 
-	bit := 1 << ((int(now.Weekday()) + 6) % 7) // Monday=bit0 ... Sunday=bit6
-	c := dbClock{
+	bit := weekdayBit(now.Weekday()) // Monday=bit0 ... Sunday=bit6
+	c := testClock{
 		todayBit:    bit,
 		otherDays:   127 &^ bit,
 		activeStart: "00:00:00",
@@ -136,11 +138,11 @@ func addRule(t *testing.T, db *sql.DB, ruleType, pattern, action string, groups 
 	return id
 }
 
-func (c dbClock) always() [3]any     { return [3]any{c.activeStart, c.activeEnd, 127} }
-func (c dbClock) today() [3]any      { return [3]any{c.activeStart, c.activeEnd, c.todayBit} }
-func (c dbClock) otherDay() [3]any   { return [3]any{c.activeStart, c.activeEnd, c.otherDays} }
-func (c dbClock) wrongTime() [3]any  { return [3]any{c.inactiveFrom, c.inactiveTo, 127} }
-func (c dbClock) activeTime() [3]any { return [3]any{c.activeStart, c.activeEnd, c.todayBit} }
+func (c testClock) always() [3]any     { return [3]any{c.activeStart, c.activeEnd, 127} }
+func (c testClock) today() [3]any      { return [3]any{c.activeStart, c.activeEnd, c.todayBit} }
+func (c testClock) otherDay() [3]any   { return [3]any{c.activeStart, c.activeEnd, c.otherDays} }
+func (c testClock) wrongTime() [3]any  { return [3]any{c.inactiveFrom, c.inactiveTo, 127} }
+func (c testClock) activeTime() [3]any { return [3]any{c.activeStart, c.activeEnd, c.todayBit} }
 
 func blockedDomain(e *Engine, host string, group string) bool {
 	req := get("https://" + host + "/")
@@ -157,7 +159,8 @@ func TestPostgresSchemaAndSeed(t *testing.T) {
 		t.Fatalf("apply seed.sql: %v", err)
 	}
 
-	e := NewEngine(db)
+	noon := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) // a Monday
+	e := pgEngine(db, WithClock(func() time.Time { return noon }))
 	if d, _ := e.DecideWithReason(get("https://blocked.example/")); d != Block {
 		t.Errorf("seeded blocked domain: %v", d)
 	}
@@ -190,7 +193,7 @@ func TestPostgresScheduling(t *testing.T) {
 	addRule(t, db, "domain", "shared.example", "block", []int{1, 2}, c.always())
 	addRule(t, db, "domain", "group2.example", "block", []int{2}, c.always())
 
-	e := NewEngine(db)
+	e := pgEngine(db)
 	tests := []struct {
 		host, group string
 		want        bool
@@ -225,7 +228,7 @@ func TestPostgresKeywordRulesAndActions(t *testing.T) {
 	addRule(t, db, "domain", "dup.example", "block", []int{1}, c.always())
 	addRule(t, db, "domain", "dup.example", "accept", []int{1}, c.always())
 
-	e := NewEngine(db)
+	e := pgEngine(db)
 	req := get("https://x.example/")
 	for body, want := range map[string]bool{
 		"mind the Secret Sauce":   true,
@@ -237,10 +240,9 @@ func TestPostgresKeywordRulesAndActions(t *testing.T) {
 			t.Errorf("%q: matched = %v, want %v", body, found, want)
 		}
 	}
-	// With conflicting rules for one domain, a decision is still made (the
-	// later row wins); the point is that loading doesn't fail.
-	if d, _ := e.DecideWithReason(get("https://dup.example/")); d != Block && d != Accept {
-		t.Errorf("conflicting domain rules gave %v", d)
+	// When rules disagree about a domain, blocking wins.
+	if d, _ := e.DecideWithReason(get("https://dup.example/")); d != Block {
+		t.Errorf("conflicting domain rules gave %v, want Block", d)
 	}
 }
 
@@ -275,7 +277,7 @@ func TestPostgresDeletingRuleCascades(t *testing.T) {
 			t.Errorf("%s has %d rows after deleting the rule (err %v)", table, n, err)
 		}
 	}
-	if blockedDomain(NewEngine(db), "gone.example", "") {
+	if blockedDomain(pgEngine(db), "gone.example", "") {
 		t.Error("deleted rule still applies")
 	}
 }
@@ -284,5 +286,131 @@ func TestPostgresSchemaCannotBeAppliedTwice(t *testing.T) {
 	db := newSchemaDB(t)
 	if _, err := db.Exec(readSQL(t, "schema.sql")); err == nil {
 		t.Fatal("re-applying schema.sql should fail on existing tables")
+	}
+}
+
+// The schedule is evaluated in Go from values stored in Postgres, so check the
+// stored times round-trip exactly, including the boundaries.
+func TestPostgresScheduleBoundariesRoundTrip(t *testing.T) {
+	db := newSchemaDB(t)
+	addRule(t, db, "domain", "window.example", "block", []int{1},
+		[3]any{"09:30:00", "10:30:00", 1}, // Mondays only
+	)
+	addRule(t, db, "domain", "fractional.example", "block", []int{1},
+		[3]any{"00:00:00", "23:59:59.999999", 127},
+	)
+
+	var now time.Time
+	clock := func() time.Time { return now }
+	e := pgEngine(db, WithClock(clock), WithRefreshInterval(24*time.Hour))
+
+	monday := func(h, m, s, us int) time.Time { return time.Date(2026, 10, 5, h, m, s, us*1000, time.UTC) }
+	for _, tt := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{monday(9, 29, 59, 999999), false},
+		{monday(9, 30, 0, 0), true},
+		{monday(10, 30, 0, 0), true},
+		{monday(10, 30, 0, 1), false},
+		{monday(10, 30, 1, 0), false},
+		{time.Date(2026, 10, 6, 9, 45, 0, 0, time.UTC), false}, // Tuesday
+		{time.Date(2026, 10, 12, 9, 45, 0, 0, time.UTC), true}, // next Monday
+	} {
+		now = tt.at
+		if got := blockedDomain(e, "window.example", ""); got != tt.want {
+			t.Errorf("at %s: blocked = %v, want %v", tt.at.Format("Mon 15:04:05.000000"), got, tt.want)
+		}
+	}
+
+	now = monday(23, 59, 59, 999999)
+	if !blockedDomain(e, "fractional.example", "") {
+		t.Error("23:59:59.999999 should be inside an all-day window")
+	}
+}
+
+func TestPostgresEachWeekdayUsesItsOwnBit(t *testing.T) {
+	db := newSchemaDB(t)
+	names := []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+	for i, name := range names {
+		addRule(t, db, "domain", name+".example", "block", []int{1}, [3]any{"00:00:00", "23:59:59.999999", 1 << i})
+	}
+
+	var now time.Time
+	e := pgEngine(db, WithClock(func() time.Time { return now }), WithRefreshInterval(24*time.Hour))
+	for i, active := range names { // Oct 5 2026 is a Monday
+		now = time.Date(2026, 10, 5+i, 12, 0, 0, 0, time.UTC)
+		for _, name := range names {
+			if got, want := blockedDomain(e, name+".example", ""), name == active; got != want {
+				t.Errorf("on %s: %s.example blocked = %v, want %v", active, name, got, want)
+			}
+		}
+	}
+}
+
+// Regression: a window that starts partway through the hour must be picked up
+// without waiting for the next hour or a reload.
+func TestPostgresWindowStartingMidHourIsNotMissed(t *testing.T) {
+	db := newSchemaDB(t)
+	addRule(t, db, "domain", "late.example", "block", []int{1}, [3]any{"09:30:00", "10:30:00", 127})
+
+	now := time.Date(2026, 10, 5, 9, 5, 0, 0, time.UTC)
+	e := pgEngine(db, WithClock(func() time.Time { return now }), WithRefreshInterval(24*time.Hour))
+
+	if blockedDomain(e, "late.example", "") {
+		t.Fatal("blocked before the window starts")
+	}
+	now = time.Date(2026, 10, 5, 9, 31, 0, 0, time.UTC)
+	if !blockedDomain(e, "late.example", "") {
+		t.Fatal("window that started mid-hour was missed")
+	}
+}
+
+func TestPostgresRuleEditsAreRefreshed(t *testing.T) {
+	db := newSchemaDB(t)
+	addRule(t, db, "domain", "first.example", "block", []int{1}, [3]any{"00:00:00", "23:59:59.999999", 127})
+
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	e := pgEngine(db, WithClock(func() time.Time { return now }), WithRefreshInterval(time.Minute))
+	if !blockedDomain(e, "first.example", "") || blockedDomain(e, "second.example", "") {
+		t.Fatal("initial rules wrong")
+	}
+
+	addRule(t, db, "domain", "second.example", "block", []int{1}, [3]any{"00:00:00", "23:59:59.999999", 127})
+	if _, err := db.Exec("DELETE FROM rules WHERE pattern = 'first.example'"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !blockedDomain(e, "first.example", "") {
+		t.Fatal("edit visible before the refresh interval")
+	}
+	now = now.Add(2 * time.Minute)
+	if blockedDomain(e, "first.example", "") || !blockedDomain(e, "second.example", "") {
+		t.Fatal("edits not visible after the refresh interval")
+	}
+}
+
+func TestPostgresOvernightWindowRoundTrip(t *testing.T) {
+	db := newSchemaDB(t)
+	// Monday 22:00 until Tuesday 06:00; the schema must accept start > end.
+	addRule(t, db, "domain", "night.example", "block", []int{1}, [3]any{"22:00:00", "06:00:00", 1})
+
+	var now time.Time
+	e := pgEngine(db, WithClock(func() time.Time { return now }), WithRefreshInterval(24*time.Hour))
+	for _, tt := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{time.Date(2026, 10, 5, 21, 59, 59, 0, time.UTC), false}, // Monday
+		{time.Date(2026, 10, 5, 22, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 10, 6, 5, 59, 59, 0, time.UTC), true}, // Tuesday morning
+		{time.Date(2026, 10, 6, 6, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 10, 6, 6, 0, 1, 0, time.UTC), false},
+		{time.Date(2026, 10, 6, 23, 0, 0, 0, time.UTC), false}, // Tuesday night: Monday-only mask
+	} {
+		now = tt.at
+		if got := blockedDomain(e, "night.example", ""); got != tt.want {
+			t.Errorf("at %s: blocked = %v, want %v", tt.at.Format("Mon 15:04:05"), got, tt.want)
+		}
 	}
 }

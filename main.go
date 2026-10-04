@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
+	_ "time/tzdata" // embed the zone database so timezone names work in minimal containers
 
 	"github.com/Canopy-EdTech/Filter/pkg/config"
 	"github.com/Canopy-EdTech/Filter/pkg/filter"
@@ -45,7 +47,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	blockingEngine := filter.NewEngine(db)
+	loc, err := cfg.Location()
+	if err != nil {
+		logger.Error("Invalid timezone", "error", err)
+		os.Exit(1)
+	}
+	refresh, err := cfg.RefreshInterval()
+	if err != nil {
+		logger.Error("Invalid rule refresh interval", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("Rule schedules use timezone", "timezone", loc.String(), "rule_refresh_interval", refresh.String(), "local_time", time.Now().In(loc).Format(time.RFC3339))
+
+	blockingEngine := filter.NewEngine(db, filter.WithLocation(loc), filter.WithRefreshInterval(refresh), filter.WithLogger(logger))
 
 	ca, err := tls.LoadX509KeyPair(cfg.TLS.CACertPath, cfg.TLS.CAKeyPath)
 	if err != nil {
