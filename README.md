@@ -37,3 +37,17 @@ curl -v --cacert certs/ca.crt --noproxy "" \
 	-x http://127.0.0.1:8080 \
 	https://example.org/
 ```
+
+## Running the tests
+
+```bash
+go test ./...
+```
+
+The Postgres tests in `pkg/filter` run the real rules query and `db/schema.sql`, and are skipped unless `TEST_DATABASE_URL` is set. Each test works in its own temporary schema, so any database you point it at is left untouched, but use a throwaway one:
+
+```bash
+docker run --rm -d --name canopy-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=canopy_test -p 54329:5432 postgres:17
+TEST_DATABASE_URL='postgres://postgres:test@localhost:54329/canopy_test?sslmode=disable' go test ./...
+docker stop canopy-test-pg
+```

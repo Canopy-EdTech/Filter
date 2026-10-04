@@ -24,13 +24,14 @@ func TestCheckVariantsDecodesJSONEscapes(t *testing.T) {
 		want filter.Decision
 	}{
 		"plain":            {`{"q":"bad phrase"}`, filter.Block},
-		"unicode escape":   {`{"q":"bad phrase"}`, filter.Block},
-		"letter escapes":   {`{"q":"bad phrase"}`, filter.Block},
-		"nested json":      {`{"q":"{\"x\":\"bad\\u0020phrase\"}"}`, filter.Block},
-		"surrogate pair":   {`{"q":"bad phrase 😀"}`, filter.Block},
-		"clean escaped":    {`{"q":"hello world"}`, filter.Accept},
-		"malformed escape": {`{"q":"\u00zz bad"}`, filter.Accept},
-		"trailing slash":   {`abc\`, filter.Accept},
+		"unicode escape":   {js(`{"q":"bad~u0020phrase"}`), filter.Block},
+		"letter escapes":   {js(`{"q":"~u0062ad phrase"}`), filter.Block},
+		"nested json":      {js(`{"q":"{~"x~":~"bad~~u0020phrase~"}"}`), filter.Block},
+		"surrogate pair":   {js(`{"q":"bad~u0020phrase ~ud83d~ude00"}`), filter.Block},
+		"escaped other":    {js(`{"q":"say bad~nphrase"}`), filter.Accept},
+		"clean escaped":    {js(`{"q":"hello~u0020world"}`), filter.Accept},
+		"malformed escape": {js(`{"q":"~u00zz bad"}`), filter.Accept},
+		"trailing slash":   {js(`abc~`), filter.Accept},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -41,9 +42,12 @@ func TestCheckVariantsDecodesJSONEscapes(t *testing.T) {
 	}
 }
 
+// js turns '~' into a backslash so JSON escapes can be written readably.
+func js(s string) string { return strings.ReplaceAll(s, "~", `\`) }
+
 func TestUnescapeJSONStrings(t *testing.T) {
-	got, changed := unescapeJSONStrings([]byte(`aé\n\"b😀`))
-	if !changed || string(got) != "aé\n\"b\U0001F600" {
+	got, changed := unescapeJSONStrings([]byte(js(`a~u00e9~n~"b~ud83d~ude00`)))
+	if !changed || string(got) != "a\u00e9\n\"b\U0001F600" {
 		t.Fatalf("got %q changed=%v", got, changed)
 	}
 }
@@ -205,7 +209,7 @@ func TestWebSocketClientBlocksFragmentedAndEscaped(t *testing.T) {
 	stream := bytes.Join([][]byte{
 		maskedFrame(1, false, `{"q":"bad`),
 		maskedFrame(9, true, "ping"), // control frame interleaved
-		maskedFrame(0, true, ` phrase"}`),
+		maskedFrame(0, true, js(`~u0020phrase"}`)),
 	}, nil)
 	err := writeInChunks(f, stream, 6)
 	if !errors.Is(err, errWebSocketBlocked) {
