@@ -40,3 +40,6 @@ certs/
 # Node.js
 frontend/node_modules/
 frontend/package-lock.json
+
+# Local runtime config (contains DB credentials); copy config.example.json
+config.json

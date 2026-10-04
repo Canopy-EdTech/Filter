@@ -1,0 +1,12 @@
+{
+	"listen_addr": ":8080",
+	"block_page_path": "blockpage/blockpage.html",
+	"log_level": "info",
+	"database": {
+		"url": "postgres://postgres:postgres@localhost:5432/canopy_filter?sslmode=disable"
+	},
+	"tls": {
+		"ca_cert_path": "certs/ca.crt",
+		"ca_key_path": "certs/ca.key"
+	}
+}
